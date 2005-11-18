@@ -1,0 +1,54 @@
+# 
+#  Example configuration file for plugins
+#
+
+# enable this to get configuration via http; see perldoc
+# plugins/http_config for details.
+#   http_config http://localhost/~smtpd/config/  http://www.example.com/smtp.pl?config=
+
+quit_fortune
+
+check_earlytalker
+count_unrecognized_commands 4
+check_relay
+
+require_resolvable_fromhost
+
+rhsbl
+dnsbl
+check_badmailfrom
+check_badrcptto
+check_spamhelo
+
+# sender_permitted_from
+
+# this plugin needs to run after all other "rcpt" plugins
+rcpt_ok
+
+# content filters
+virus/klez_filter
+
+
+# You can run the spamassassin plugin with options.  See perldoc
+# plugins/spamassassin for details. 
+#
+spamassassin
+
+# rejects mails with a SA score higher than 20 and munges the subject
+# of the score is higher than 10.  
+#
+#   spamassassin reject_threshold 20 munge_subject_threshold 10
+
+
+# run the clamav virus checking plugin
+# virus/clamav
+
+# queue the mail with qmail-queue
+queue/qmail-queue
+
+
+# If you need to run the same plugin multiple times, you can do
+# something like the following
+#    check_relay
+#    check_relay:0 somearg
+#    check_relay:1 someotherarg

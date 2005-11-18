@@ -1,0 +1,145 @@
+=head1 NAME
+
+check_earlytalker - Check that the client doesn't talk before we send the SMTP banner
+
+=head1 DESCRIPTION
+
+Checks to see if the remote host starts talking before we've issued a 2xx
+greeting.  If so, we're likely looking at a direct-to-MX spam agent which
+pipelines its entire SMTP conversation, and will happily dump an entire spam
+into our mail log even if later tests deny acceptance.
+
+Depending on configuration, clients which behave in this way are either
+immediately disconnected with a deny or denysoft code, or else are issued this
+on all mail/rcpt commands in the transaction.
+
+=head1 CONFIGURATION
+
+=over 4
+
+=item wait [integer]
+
+The number of seconds to delay the initial greeting to see if the connecting
+host speaks first.  The default is 1.  Do not select a value that is too high,
+or you may be unable to receive mail from MTAs with short SMTP connect or
+greeting timeouts -- these are known to range as low as 30 seconds, and may
+in some cases be configured lower by mailserver admins.  Network transit time
+must also be allowed for.
+
+=item action [string: deny, denysoft, log]
+
+What to do when matching an early-talker -- the options are I<deny>,
+I<denysoft> or I<log>.
+
+If I<log> is specified, the connection will be allowed to proceed as normal,
+and only a warning will be logged.
+
+The default is I<denysoft>.
+
+=item defer-reject [boolean]
+
+When an early-talker is detected, if this option is set to a true value, the
+SMTP greeting will be issued as usual, but all RCPT/MAIL commands will be
+issued a deny or denysoft (depending on the value of I<action>).  The default
+is to react at the SMTP greeting stage by issuing the apropriate response code
+and terminating the SMTP connection.
+
+=back
+
+=cut
+
+use IO::Select;
+
+use warnings;
+use strict;
+
+sub register {
+  my ($self, $qp, @args) = @_;
+
+  if (@args % 2) {
+        $self->log(LOGERROR, "Unrecognized/mismatched arguments");
+        return undef;
+  }
+  $self->{_args} = {
+        'wait' => 1,
+        'action' => 'denysoft',
+        'defer-reject' => 0,
+        @args,
+  };
+  if ($qp->{conn} && $qp->{conn}->isa('Apache2::Connection')) {
+      require APR::Const;
+      APR::Const->import(qw(POLLIN SUCCESS));
+      $self->register_hook('connect', 'apr_connect_handler');
+  }
+  else {
+      $self->register_hook('connect', 'connect_handler');
+  }
+  $self->register_hook('mail', 'mail_handler')
+    if $self->{_args}->{'defer-reject'};
+  1;
+}
+
+sub apr_connect_handler {
+    my ($self, $transaction) = @_;
+    
+    return DECLINED if ($self->qp->connection->notes('whitelistclient'));
+    my $ip = $self->qp->connection->remote_ip;
+
+    my $c = $self->qp->{conn};
+    my $socket = $c->client_socket;
+    my $timeout = $self->{_args}->{'wait'} * 1_000_000;
+    
+    my $rc = $socket->poll($c->pool, $timeout, APR::Const::POLLIN());
+    if ($rc == APR::Const::SUCCESS()) {
+        $self->log(LOGNOTICE, "remote host started talking before we said hello [$ip]");
+        if ($self->{_args}->{'defer-reject'}) {
+            $self->qp->connection->notes('earlytalker', 1);
+        }
+        else {
+            my $msg = 'Connecting host started transmitting before SMTP greeting';
+            return (DENY,$msg) if $self->{_args}->{'action'} eq 'deny';
+            return (DENYSOFT,$msg) if $self->{_args}->{'action'} eq 'denysoft';
+        }
+    }
+    else {
+        $self->log(LOGINFO, "remote host said nothing spontaneous, proceeding");
+    }
+}
+
+sub connect_handler {
+  my ($self, $transaction) = @_;
+  my $in = new IO::Select;
+  my $ip = $self->qp->connection->remote_ip;
+
+  return DECLINED
+      if ($self->qp->connection->notes('whitelistclient'));
+
+  $in->add(\*STDIN) || return DECLINED;
+  if ($in->can_read($self->{_args}->{'wait'})) {
+    $self->log(LOGNOTICE, "remote host started talking before we said hello [$ip]");
+    if ($self->{_args}->{'defer-reject'}) {
+        $self->qp->connection->notes('earlytalker', 1);
+    } else {
+      my $msg = 'Connecting host started transmitting before SMTP greeting';
+      return (DENY,$msg) if $self->{_args}->{'action'} eq 'deny';
+      return (DENYSOFT,$msg) if $self->{_args}->{'action'} eq 'denysoft';
+    }
+  } else {
+    $self->log(LOGINFO, 'remote host said nothing spontaneous, proceeding');
+  }
+  return DECLINED;
+}
+
+sub mail_handler {
+  my ($self, $txn) = @_;
+  my $msg = 'Connecting host started transmitting before SMTP greeting';
+
+  return DECLINED unless $self->qp->connection->notes('earlytalker');
+  return (DENY,$msg) if $self->{_args}->{'action'} eq 'deny';
+  return (DENYSOFT,$msg) if $self->{_args}->{'action'} eq 'denysoft';
+  return DECLINED;
+}
+
+
+1;
+

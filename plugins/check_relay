@@ -1,0 +1,26 @@
+# this plugin checks the relayclients config file and
+# $ENV{RELAYCLIENT} to see if relaying is allowed.
+#
+
+sub hook_connect {
+  my ($self, $transaction) = @_;
+  my $connection = $self->qp->connection;
+
+  # Check if this IP is allowed to relay
+  my @relay_clients = $self->qp->config("relayclients");
+  my $more_relay_clients = $self->qp->config("morerelayclients", "map");
+  my %relay_clients = map { $_ => 1 } @relay_clients;
+  my $client_ip = $self->qp->connection->remote_ip;
+  while ($client_ip) {
+    if (exists($ENV{RELAYCLIENT}) or
+        exists($relay_clients{$client_ip}) or
+        exists($more_relay_clients->{$client_ip}))
+    {
+      $connection->relay_client(1);
+      last;
+    }
+    $client_ip =~ s/\d+\.?$//; # strip off another 8 bits
+  }
+  
+  return (DECLINED);
+}

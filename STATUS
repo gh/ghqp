@@ -1,0 +1,110 @@
+
+New Name Suggestions
+====================
+ignite
+flare(mta)
+quench
+pez (or pezmail)
+
+
+Near term roadmap
+=================
+
+0.32:
+      - Bugfixes
+      - add module requirements to the META.yml file
+
+0.40:
+      - Add user configuration plugin
+      - Add plugin API for checking if a local email address is valid
+      - use keyword "ESMTPA" in Received header in case of authentication to comply with RFC 3848.
+
+
+0.50:
+      Include the popular check_delivery[1] functionality via the 0.30 API
+      [1] until then get it from 
+          http://www.openminddev.net/files/qpsmtpd/plugins/check_delivery/
+
+      Add API to reject individual recipients after the RCPT has been
+      accepted and generate individual bounce messages.
+
+0.51: bugfixes
+
+0.60: merge with the highperf branch?
+
+1.0bN: bugfixes (repeat until we run out of bugs to fix) 
+1.0.0: it just might happen!
+1.1.0: new development
+
+
+Issues
+======
+
+Before next release
+-------------------
+
+update clamav plugin config to support the latest version properly
+
+
+Some day...
+-----------
+
+Understand "extension parameters" to the MAIL FROM and RCPT TO
+parameters (and make the plugin hooks able to get at them).
+
+plugins/queue/qmail-queue is still calling exit inappropriately
+(should call disconnect or some such)
+
+add whitelist support to the dnsbl plugin (and maybe to the rhsbl
+plugin too).  Preferably both supporting DNS based whitelists and
+filebased (CDB) ones.
+
+
+plugin support;
+
+  allow plugins to return multiple response lines (does it have to
+  join them to one for SMTP?)
+
+  support plugins for the rest of the commands.
+
+  specify a priority in register_hook. ("LAST", "FIRST", "MIDDLE", or
+  maybe a number)
+
+  plugin access to the data line by line during the DATA phase
+  (instead of just after)
+
+  if qmail-queue can't be loaded we still return 250 ?!
+
+Make a system for configuring the plugins per user/domain/...
+
+  support databytes per user / domain
+
+plugin to reject mails from <> if it has multiple recipients.  
+
+localiphost - support foo@[a.b.c.d] addresses 
+
+support smtpgreeting (?)
+
+
+
+TRACE in Constants.pm is not actually being used.  Should it be?
+
+Move dispatch() etc from SMTP.pm to Qpsmtpd.pm to allow other similar
+protocols to use the qpsmtpd framework. 
+
+
+
+Future Ideas
+============
+
+Methods to create a bounce message easily; partly so we can accept a
+mail for one user but bounce it right away for another RCPT'er.
+
+The data_post hook should be able to put in the notes what addresses
+should go through, bounce and get rejected respectively, and qpsmtpd
+should just do the right thing.  See also
+http://nntp.perl.org/group/perl.qpsmtpd/170
+
+David Carraway has some thoughts for "user filters"
+http://nntp.perl.org/group/perl.qpsmtpd/2
+

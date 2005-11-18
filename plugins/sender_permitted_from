@@ -1,0 +1,123 @@
+
+=head1 NAME
+
+SPF - plugin to implement Sender Permitted From
+
+=head1 SYNOPSIS
+
+  # in config/plugins
+  sender_permitted_from
+
+Or if you wish to issue 5xx on SPF fail:
+
+  sender_permitted_from spf_deny 1
+
+Other arguments are 'trust 0' and 'guess 0'. These turn off processing of 
+spf.trusted-forwarders.org and the best_guess functionality. It is unlikely 
+that you want to turn these off.
+
+Adding 'spf_deny 2' will also issue a 5xx on a softfail response.
+
+You can also specify local SPF policy with 
+
+    include '<spf mechanism list>'
+
+See also http://spf.pobox.com/
+
+=cut
+
+use Mail::SPF::Query 1.991;
+
+sub register {
+  my ($self, $qp, @args) = @_;
+  %{$self->{_args}} = @args;
+}
+
+sub hook_mail {
+  my ($self, $transaction, $sender) = @_;
+
+  return (DECLINED) unless ($sender->format ne "<>"
+                            and $sender->host && $sender->user);
+
+  # If we are receving from a relay permitted host, then we are probably
+  # not the delivery system, and so we shouldn't check
+
+  return (DECLINED) if $self->qp->connection->relay_client();
+  my @relay_clients = $self->qp->config("relayclients");
+  my $more_relay_clients = $self->qp->config("morerelayclients", "map");
+  my %relay_clients = map { $_ => 1 } @relay_clients;
+  my $client_ip = $self->qp->connection->remote_ip;
+  while ($client_ip) {
+    return (DECLINED) if exists $relay_clients{$client_ip};
+    return (DECLINED) if exists $more_relay_clients->{$client_ip};
+    $client_ip =~ s/\d+\.?$//; # strip off another 8 bits
+  }
+
+  my $host = lc $sender->host;
+  my $from = $sender->user . '@' . $host;
+
+  my $ip = $self->qp->connection->remote_ip;
+  my $helo = $self->qp->connection->hello_host;
+
+  my $query = Mail::SPF::Query->new(ip => $ip, sender => $from, helo => $helo,
+		sanitize => 1,
+		local => $self->{_args}{local},
+		guess => defined($self->{_args}{guess}) ? $self->{_args}{guess} : 1,
+		trusted => defined($self->{_args}{trust}) ? $self->{_args}{trust} : 1) 
+    || die "Couldn't construct Mail::SPF::Query object";
+  $transaction->notes('spfquery', $query);
+               
+  return (DECLINED);
+}
+
+sub hook_rcpt {
+  my ($self, $transaction, $rcpt) = @_;
+  
+  # special addresses don't get SPF-tested.
+  return DECLINED if $rcpt and $rcpt->user and $rcpt->user =~ /^(?:postmaster|abuse|mailer-daemon|root)$/i;
+  
+  my $query = $transaction->notes('spfquery');
+
+  return DECLINED if !$query;
+  my ($result, $smtp_comment, $comment) = $query->result2($rcpt->address);
+  
+  if ($result eq "error") {
+    return (DENYSOFT, "SPF error: $smtp_comment");
+  }
+
+  if ($result eq "fail" and $self->{_args}{spf_deny}) {
+    return (DENY, "SPF forgery: $smtp_comment");
+  }
+
+  if ($result eq "softfail" and $self->{_args}{spf_deny} > 1) {
+    return (DENY, "SPF probable forgery: $smtp_comment");
+  }
+
+  if ($result eq 'fail' or $result eq 'softfail') {
+    $self->log(LOGDEBUG, "result for $rcpt->address was $result: $comment");
+  }
+   
+  return DECLINED;
+}
+
+sub _uri_escape {
+  my $str = shift;
+  $str =~ s/([^A-Za-z0-9\-_.!~*\'()])/sprintf "%%%X", ord($1)/eg;
+  return $str;
+}
+
+sub hook_data_post {
+  my ($self, $transaction) = @_;
+
+  my $query = $transaction->notes('spfquery');
+  return DECLINED if !$query;
+
+  my ($result, $smtp_comment, $comment) = $query->message_result2();
+
+  $self->log(LOGDEBUG, "result was $result: $comment") if ($result);
+
+  $transaction->header->add('Received-SPF' => "$result ($comment)", 0);
+
+  return DECLINED;
+}
+

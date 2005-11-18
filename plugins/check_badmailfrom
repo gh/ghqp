@@ -1,0 +1,54 @@
+# -*- perl -*-
+=head1 NAME
+
+check_badmailfrom - checks the standard badmailfrom config
+
+=head1 DESCRIPTION
+
+Reads the "badmailfrom" configuration like qmail-smtpd does.  From the
+qmail-smtpd docs:
+
+"Unacceptable envelope sender addresses.  qmail-smtpd will reject every
+recipient address for a message if the envelope sender address is
+listed in badmailfrom.  A line in badmailfrom may be of the form
+@host, meaning every address at host."
+
+=head1 NOTES
+
+According to the SMTP protocol, we can't reject until after the RCPT
+stage, so store it until later.
+
+=cut
+
+sub hook_mail {
+  my ($self, $transaction, $sender) = @_;
+
+  my @badmailfrom = $self->qp->config("badmailfrom")
+    or return (DECLINED);
+
+  return (DECLINED) unless ($sender->format ne "<>"
+                            and $sender->host && $sender->user);
+
+  my $host = lc $sender->host;
+  my $from = lc($sender->user) . '@' . $host;
+
+  for my $bad (@badmailfrom) {
+    $bad =~ s/^\s*(\S+).*/$1/;
+    next unless $bad;
+    $bad = lc $bad;
+    $self->log(LOGWARN, "Bad badmailfrom config: No \@ sign in $bad") and next unless $bad =~ m/\@/;
+    $transaction->notes('badmailfrom', "sorry, your envelope sender is in my badmailfrom list")
+      if ($bad eq $from) || (substr($bad,0,1) eq '@' && $bad eq "\@$host");
+  }
+  return (DECLINED);
+}
+
+sub hook_rcpt {
+  my ($self, $transaction, $rcpt) = @_;
+  my $note = $transaction->notes('badmailfrom');
+  if ($note) {
+    $self->log(LOGINFO, $note);
+    return (DENY, $note);
+  }
+  return (DECLINED);
+}
